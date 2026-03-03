@@ -290,6 +290,40 @@
     .accent {
       color: #ffd489;
     }
+
+    .ballGrid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 8px 0 12px;
+    }
+
+    .ballOption {
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(18, 28, 42, 0.78);
+      color: #f1f7ff;
+      padding: 8px 10px;
+      text-align: left;
+      font-size: 0.88rem;
+      line-height: 1.2;
+    }
+
+    .ballOption.selected {
+      border-color: rgba(255, 198, 105, 0.85);
+      background: rgba(111, 74, 20, 0.55);
+    }
+
+    .ballOption.locked {
+      opacity: 0.6;
+    }
+
+    .ballMeta {
+      display: block;
+      font-size: 0.76rem;
+      color: #bbcee3;
+      margin-top: 3px;
+    }
   </style>
 </head>
 <body>
@@ -309,10 +343,24 @@
       <section class="overlay active" id="menuOverlay">
         <div class="panel">
           <h1>Ball Jump Game</h1>
+          <p class="subtitle" id="selectedBallInfo">Selected: Basketball</p>
           <div class="buttons">
             <button class="primary" id="startBtn" type="button">Start Game</button>
+            <button id="playerSelectBtn" type="button">Player Select</button>
             <button id="settingsBtn" type="button">Settings</button>
             <button id="creditsBtn" type="button">Credits / Help</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="overlay" id="playerOverlay">
+        <div class="panel">
+          <h2>Player Select</h2>
+          <p class="subtitle" id="unlockProgressText">Reach higher height to unlock new balls</p>
+          <div class="ballGrid" id="playerList"></div>
+          <p class="small">Unlocks are saved automatically.</p>
+          <div class="buttons">
+            <button id="playerBackBtn" type="button">Back</button>
           </div>
         </div>
       </section>
@@ -336,7 +384,7 @@
             <input id="sfxSlider" type="range" min="0" max="1" step="0.01" value="0.8" />
           </div>
 
-          <p class="small">Controls: Move with <span class="accent">A/D</span> or <span class="accent">Left/Right</span>. Pause with <span class="accent">P</span>.</p>
+          <p class="small">Controls: Move with <span class="accent">A/D</span> or <span class="accent">Left/Right</span>. Click to fire lasers. Pause with <span class="accent">P</span>.</p>
           <div class="buttons">
             <button id="settingsBackBtn" type="button">Back</button>
           </div>
@@ -352,8 +400,9 @@
             <br />
             Help:<br />
             Move with A/D or Arrow keys.<br />
+            Click to fire laser eyes at enemies.<br />
             Stay above the bottom of the camera view.<br />
-            Blue platform = fan platform (pushes sideways with a light updraft).
+            Stomp enemies from above to defeat them.
           </p>
           <div class="buttons">
             <button id="creditsBackBtn" type="button">Back</button>
@@ -365,6 +414,7 @@
         <div class="panel">
           <h2>Game Over</h2>
           <p class="subtitle" id="finalScoreText">Final height: 0 m</p>
+          <p class="small" id="enemyStatsText">Enemies defeated: 0</p>
           <div class="buttons">
             <button class="primary" id="restartBtn" type="button">Restart</button>
             <button id="backMenuBtn" type="button">Back To Menu</button>
@@ -389,18 +439,25 @@
         pauseBtn: document.getElementById("pauseBtn"),
 
         menu: document.getElementById("menuOverlay"),
+        playerSelect: document.getElementById("playerOverlay"),
         settings: document.getElementById("settingsOverlay"),
         credits: document.getElementById("creditsOverlay"),
         gameOver: document.getElementById("gameOverOverlay"),
 
         startBtn: document.getElementById("startBtn"),
+        playerSelectBtn: document.getElementById("playerSelectBtn"),
         settingsBtn: document.getElementById("settingsBtn"),
         creditsBtn: document.getElementById("creditsBtn"),
+        playerBackBtn: document.getElementById("playerBackBtn"),
         settingsBackBtn: document.getElementById("settingsBackBtn"),
         creditsBackBtn: document.getElementById("creditsBackBtn"),
         restartBtn: document.getElementById("restartBtn"),
         backMenuBtn: document.getElementById("backMenuBtn"),
         finalScoreText: document.getElementById("finalScoreText"),
+        enemyStatsText: document.getElementById("enemyStatsText"),
+        selectedBallInfo: document.getElementById("selectedBallInfo"),
+        unlockProgressText: document.getElementById("unlockProgressText"),
+        playerList: document.getElementById("playerList"),
 
         soundToggle: document.getElementById("soundToggle"),
         musicSlider: document.getElementById("musicSlider"),
@@ -411,6 +468,7 @@
 
       const GAME_STATES = {
         MENU: "menu",
+        PLAYER_SELECT: "player_select",
         SETTINGS: "settings",
         CREDITS: "credits",
         PLAYING: "playing",
@@ -495,12 +553,24 @@
           rangeMax: 86
         },
 
+        enemy: {
+          spawnHeightMin: 900,
+          spawnChance: 0.24,
+          minRowSpacing: 130,
+          maxLive: 14,
+          size: 24,
+          horizontalRange: 18,
+          verticalRange: 13,
+          speedMin: 1.1,
+          speedMax: 2.2
+        },
+
         background: {
-          grassEnd: 520,
-          skyEnd: 3000,
-          spaceStart: 2500,
-          moonApproachStart: 2300,
-          moonApproachEnd: 6500
+          grassEnd: 700,
+          skyEnd: 9000,
+          spaceStart: 6200,
+          moonApproachStart: 9000,
+          moonApproachEnd: 28000
         }
       };
 
@@ -513,14 +583,27 @@
       const settings = loadSettings();
       syncSettingsUI();
 
+      const BALLS = [
+        { id: "basketball", label: "Basketball", unlockM: 0 },
+        { id: "tennis", label: "Tennis Ball", unlockM: 150 },
+        { id: "golf", label: "Golf Ball", unlockM: 320 },
+        { id: "orange", label: "Orange", unlockM: 560 },
+        { id: "beach", label: "Beach Ball", unlockM: 900 }
+      ];
+      const progression = loadProgress();
+
       let state = GAME_STATES.MENU;
       let player;
       let platforms = [];
+      let enemies = [];
+      let lasers = [];
       let particles = [];
       let cameraY = 0;
       let bestHeight = 0;
       let highestPlatformY = 0;
       let startPlayerY = 0;
+      let runStats = { kills: 0, byType: { circle: 0, triangle: 0, square: 0 } };
+      let lastEnemySpawnY = Infinity;
       let lastTime = 0;
 
       const rng = {
@@ -572,6 +655,8 @@
           this.stepCycle = 0;
           this.airTilt = 0;
           this.invulnLandingFrames = 0;
+          this.prevX = this.x;
+          this.prevY = this.y;
         }
 
         reset() {
@@ -585,9 +670,13 @@
           this.stepCycle = 0;
           this.airTilt = 0;
           this.invulnLandingFrames = 0;
+          this.prevX = this.x;
+          this.prevY = this.y;
         }
 
         update(dt) {
+          this.prevX = this.x;
+          this.prevY = this.y;
           const moveDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
           if (moveDir !== 0) {
             this.vx += moveDir * cfg.moveAccel * dt;
@@ -657,20 +746,26 @@
 
           const stretch = this.onGround ? (1 - this.squash * 0.18) : (1 + clamp(-this.vy / 1200, -0.06, 0.12));
           const squashX = this.onGround ? (1 + this.squash * 0.14) : (1 - clamp(-this.vy / 1200, -0.06, 0.1));
-          drawBasketballPlayer(g, this, cx, by, squashX, stretch, bob);
+          drawSelectedBallPlayer(g, this, cx, by, squashX, stretch, bob);
         }
       }
 
-      function drawBasketballPlayer(g, playerRef, cx, by, squashX, stretch, bob) {
+      function drawSelectedBallPlayer(g, playerRef, cx, by, squashX, stretch, bob) {
         const r = 20;
         const y = by - r - 6 + bob * 0.25;
+        const selected = getSelectedBallDef();
 
         g.save();
         g.translate(cx, y);
         g.rotate(playerRef.airTilt * 0.8);
         g.scale(playerRef.facing * squashX, stretch);
 
-        g.fillStyle = "#e67e22";
+        if (selected.id === "tennis") g.fillStyle = "#b6f55f";
+        else if (selected.id === "golf") g.fillStyle = "#f0f4f7";
+        else if (selected.id === "orange") g.fillStyle = "#f39a1c";
+        else if (selected.id === "beach") g.fillStyle = "#fff3d8";
+        else g.fillStyle = "#e67e22";
+
         g.strokeStyle = "#1e1209";
         g.lineWidth = 2.6;
         g.beginPath();
@@ -678,18 +773,63 @@
         g.fill();
         g.stroke();
 
-        // Basketball seams
-        g.strokeStyle = "#5b2e0d";
-        g.lineWidth = 2.2;
-        g.beginPath();
-        g.arc(0, 0, r * 0.9, -Math.PI * 0.5, Math.PI * 0.5);
-        g.moveTo(-r * 0.9, 0);
-        g.arc(0, 0, r * 0.9, Math.PI * 0.5, Math.PI * 1.5);
-        g.moveTo(-r, 0);
-        g.lineTo(r, 0);
-        g.moveTo(0, -r);
-        g.lineTo(0, r);
-        g.stroke();
+        if (selected.id === "basketball") {
+          g.strokeStyle = "#5b2e0d";
+          g.lineWidth = 2.2;
+          g.beginPath();
+          g.arc(0, 0, r * 0.9, -Math.PI * 0.5, Math.PI * 0.5);
+          g.moveTo(-r * 0.9, 0);
+          g.arc(0, 0, r * 0.9, Math.PI * 0.5, Math.PI * 1.5);
+          g.moveTo(-r, 0);
+          g.lineTo(r, 0);
+          g.moveTo(0, -r);
+          g.lineTo(0, r);
+          g.stroke();
+        } else if (selected.id === "tennis") {
+          g.strokeStyle = "#f8fff8";
+          g.lineWidth = 2.1;
+          g.beginPath();
+          g.arc(-4, 0, r * 0.8, -1.2, 1.2);
+          g.moveTo(4, -r * 0.8);
+          g.arc(4, 0, r * 0.8, 1.9, 4.35);
+          g.stroke();
+        } else if (selected.id === "golf") {
+          g.fillStyle = "rgba(210, 220, 232, 0.65)";
+          for (let i = 0; i < 24; i++) {
+            const ang = (Math.PI * 2 * i) / 24;
+            g.beginPath();
+            g.arc(Math.cos(ang) * (r * 0.52), Math.sin(ang) * (r * 0.52), 1.35, 0, Math.PI * 2);
+            g.fill();
+          }
+        } else if (selected.id === "orange") {
+          g.strokeStyle = "#c66c10";
+          g.lineWidth = 1.5;
+          for (let i = 0; i < 6; i++) {
+            const a = (Math.PI * 2 * i) / 6;
+            g.beginPath();
+            g.moveTo(0, 0);
+            g.lineTo(Math.cos(a) * (r - 2), Math.sin(a) * (r - 2));
+            g.stroke();
+          }
+        } else if (selected.id === "beach") {
+          const slices = [
+            "#ff5d73", "#ffd447", "#58d9f8", "#8ef087", "#ffb666", "#79b5ff"
+          ];
+          for (let i = 0; i < slices.length; i++) {
+            const a0 = (-Math.PI / 2) + (Math.PI * 2 * i) / slices.length;
+            const a1 = (-Math.PI / 2) + (Math.PI * 2 * (i + 1)) / slices.length;
+            g.fillStyle = slices[i];
+            g.beginPath();
+            g.moveTo(0, 0);
+            g.arc(0, 0, r - 1.5, a0, a1);
+            g.closePath();
+            g.fill();
+          }
+          g.fillStyle = "#fff6df";
+          g.beginPath();
+          g.arc(0, 0, r * 0.2, 0, Math.PI * 2);
+          g.fill();
+        }
 
         // Simple face for readability
         g.fillStyle = "#fff";
@@ -989,6 +1129,7 @@
         draw(g) {
           g.save();
           g.translate(this.x, this.y);
+          g.filter = `brightness(${platformLightAtY(this.y)})`;
 
           if (this.type === "normal") {
             drawPlatformBody(g, this.w, this.h, "#55ba69", "#3d8d50", "#2f663a");
@@ -1037,6 +1178,88 @@
         }
       }
 
+      class Enemy {
+        constructor(platform, type, offsetX) {
+          this.platform = platform;
+          this.type = type;
+          this.size = cfg.enemy.size;
+          this.offsetX = offsetX;
+          this.baseX = platform.x + offsetX;
+          this.baseY = platform.y - this.size - 2;
+          this.x = this.baseX;
+          this.y = this.baseY;
+          this.dead = false;
+          this.phase = rng.range(0, Math.PI * 2);
+          this.speed = rng.range(cfg.enemy.speedMin, cfg.enemy.speedMax);
+        }
+
+        update(dt) {
+          if (this.dead) return;
+          if (!this.platform || !this.platform.isSolid()) {
+            this.dead = true;
+            return;
+          }
+
+          this.baseX = this.platform.x + this.offsetX;
+          this.baseY = this.platform.y - this.size - 2;
+          this.phase += dt * this.speed;
+
+          this.x = this.baseX - this.size * 0.5;
+          this.y = this.baseY;
+
+          if (this.type === "circle") {
+            this.y = this.baseY + Math.sin(this.phase * 2.1) * cfg.enemy.verticalRange;
+          } else if (this.type === "triangle") {
+            this.x = this.baseX - this.size * 0.5 + Math.sin(this.phase * 2.4) * cfg.enemy.horizontalRange;
+          }
+        }
+
+        draw(g) {
+          if (this.dead) return;
+          const cx = this.x + this.size * 0.5;
+          const cy = this.y + this.size * 0.5;
+
+          g.save();
+          g.translate(cx, cy);
+          g.lineWidth = 2.2;
+          g.strokeStyle = "#1c1320";
+
+          if (this.type === "circle") {
+            g.fillStyle = "#ff6772";
+            g.beginPath();
+            g.arc(0, 0, this.size * 0.5, 0, Math.PI * 2);
+            g.fill();
+            g.stroke();
+          } else if (this.type === "triangle") {
+            g.fillStyle = "#8f8bff";
+            g.beginPath();
+            g.moveTo(0, -this.size * 0.55);
+            g.lineTo(this.size * 0.56, this.size * 0.5);
+            g.lineTo(-this.size * 0.56, this.size * 0.5);
+            g.closePath();
+            g.fill();
+            g.stroke();
+          } else {
+            g.fillStyle = "#ffd46e";
+            g.fillRect(-this.size * 0.5, -this.size * 0.5, this.size, this.size);
+            g.strokeRect(-this.size * 0.5, -this.size * 0.5, this.size, this.size);
+          }
+
+          g.fillStyle = "#fff";
+          g.beginPath();
+          g.arc(-4, -3, 2.2, 0, Math.PI * 2);
+          g.arc(4, -3, 2.2, 0, Math.PI * 2);
+          g.fill();
+          g.fillStyle = "#0a0a0d";
+          g.beginPath();
+          g.arc(-3.6, -2.6, 1.2, 0, Math.PI * 2);
+          g.arc(4.4, -2.6, 1.2, 0, Math.PI * 2);
+          g.fill();
+
+          g.restore();
+        }
+      }
+
       function drawPlatformBody(g, w, h, topColor, sideColor, edgeColor) {
         g.fillStyle = sideColor;
         g.fillRect(2, 4, w - 4, h - 2);
@@ -1045,6 +1268,12 @@
         g.strokeStyle = edgeColor;
         g.lineWidth = 2;
         g.strokeRect(1, 1, w - 2, h - 2);
+      }
+
+      function platformLightAtY(platformY) {
+        const climbAtPlatform = Math.max(0, startPlayerY - platformY);
+        const fade = smoothStep((climbAtPlatform - 250) / 4600);
+        return lerp(1.35, 0.72, fade);
       }
 
       function clamp(v, min, max) {
@@ -1075,7 +1304,11 @@
         player.reset();
 
         platforms = [];
+        enemies = [];
+        lasers = [];
         particles = [];
+        runStats = { kills: 0, byType: { circle: 0, triangle: 0, square: 0 } };
+        lastEnemySpawnY = Infinity;
 
         cameraY = player.y - canvas.height * 0.6;
         bestHeight = 0;
@@ -1083,7 +1316,8 @@
         startPlayerY = player.y;
 
         const baseY = player.y + 84;
-        platforms.push(new Platform(player.x - 18, baseY, "normal"));
+        const basePlatform = new Platform(player.x - 18, baseY, "normal");
+        platforms.push(basePlatform);
 
         let spawnY = baseY - 70;
         let prevX = player.x;
@@ -1095,6 +1329,7 @@
           const type = choosePlatformType(phase, i < 6);
           const pf = makePlatformByType(x, y, type);
           platforms.push(pf);
+          trySpawnEnemyOnPlatform(pf, Math.max(0, startPlayerY - y), i < 8);
           prevX = x;
           highestPlatformY = Math.min(highestPlatformY, y);
         }
@@ -1122,6 +1357,21 @@
           });
         }
         return new Platform(x, y, type);
+      }
+
+      function trySpawnEnemyOnPlatform(platform, currentHeight, forceSkip = false) {
+        if (forceSkip) return;
+        if (platform.type !== "normal") return;
+        if (currentHeight < cfg.enemy.spawnHeightMin) return;
+        if (Math.abs(platform.y - lastEnemySpawnY) < cfg.enemy.minRowSpacing) return;
+        if (enemies.length >= cfg.enemy.maxLive) return;
+        if (Math.random() > cfg.enemy.spawnChance) return;
+
+        const enemyType = rng.pick(["circle", "triangle", "square"]);
+        const margin = 14;
+        const offsetX = clamp(rng.range(margin, platform.w - margin), margin, platform.w - margin);
+        enemies.push(new Enemy(platform, enemyType, offsetX));
+        lastEnemySpawnY = platform.y;
       }
 
       function pickReachableX(prevX, maxStepX) {
@@ -1167,6 +1417,7 @@
           const type = choosePlatformType(phase, false);
           const platform = makePlatformByType(x, y, type);
           platforms.push(platform);
+          trySpawnEnemyOnPlatform(platform, currentHeight);
           highestPlatformY = y;
         }
       }
@@ -1204,6 +1455,7 @@
       function despawnOldPlatforms() {
         const threshold = cameraY + canvas.height + cfg.despawnBelow;
         platforms = platforms.filter((pf) => pf.y < threshold);
+        enemies = enemies.filter((e) => e.platform && platforms.includes(e.platform) && e.y < threshold && !e.dead);
       }
 
       function applyFanForces(dt) {
@@ -1226,6 +1478,145 @@
               spawnFanParticle(px - pf.fanDir * rng.range(8, 26), player.y + player.h * 0.8 - rng.range(0, 30), pf.fanDir);
             }
           }
+        }
+      }
+
+      function updateEnemies(dt) {
+        for (let i = 0; i < enemies.length; i++) {
+          enemies[i].update(dt);
+        }
+      }
+
+      function registerEnemyKill(enemy) {
+        runStats.kills += 1;
+        if (runStats.byType[enemy.type] != null) {
+          runStats.byType[enemy.type] += 1;
+        }
+      }
+
+      function segmentCircleHit(x1, y1, x2, y2, cx, cy, r) {
+        const vx = x2 - x1;
+        const vy = y2 - y1;
+        const len2 = vx * vx + vy * vy;
+        if (len2 <= 0.0001) return false;
+        let t = ((cx - x1) * vx + (cy - y1) * vy) / len2;
+        t = clamp(t, 0, 1);
+        const px = x1 + vx * t;
+        const py = y1 + vy * t;
+        const dx = cx - px;
+        const dy = cy - py;
+        return (dx * dx + dy * dy) <= (r * r);
+      }
+
+      function spawnLaser(originX, originY, targetX, targetY) {
+        lasers.push({
+          x1: originX,
+          y1: originY,
+          x2: targetX,
+          y2: targetY,
+          ttl: 0.1,
+          life: 0.1
+        });
+      }
+
+      function shootLaserAtScreenPos(screenX, screenY) {
+        if (state !== GAME_STATES.PLAYING) return;
+        const worldX = screenX;
+        const worldY = screenY + cameraY;
+        const pCenterX = player.x + player.w * 0.5;
+        const pEyeY = player.y + player.h * 0.36;
+        const leftEyeX = pCenterX - 6;
+        const rightEyeX = pCenterX + 6;
+
+        spawnLaser(leftEyeX, pEyeY, worldX, worldY);
+        spawnLaser(rightEyeX, pEyeY, worldX, worldY);
+        audio.sfx("jump");
+
+        for (let i = 0; i < enemies.length; i++) {
+          const e = enemies[i];
+          if (e.dead) continue;
+          const ex = e.x + e.size * 0.5;
+          const ey = e.y + e.size * 0.5;
+          const radius = e.size * 0.48;
+
+          const hitLeft = segmentCircleHit(leftEyeX, pEyeY, worldX, worldY, ex, ey, radius);
+          const hitRight = segmentCircleHit(rightEyeX, pEyeY, worldX, worldY, ex, ey, radius);
+          if (hitLeft || hitRight) {
+            e.dead = true;
+            registerEnemyKill(e);
+            spawnShardBurst(ex, ey, 8, "#ffc6d2");
+            audio.sfx("break");
+          }
+        }
+      }
+
+      function updateLasers(dt) {
+        for (let i = lasers.length - 1; i >= 0; i--) {
+          lasers[i].ttl -= dt;
+          if (lasers[i].ttl <= 0) lasers.splice(i, 1);
+        }
+      }
+
+      function handleEnemyCollisions() {
+        const prevBottom = player.prevY + player.h;
+        const currBottom = player.y + player.h;
+        const playerCenterX = player.x + player.w * 0.5;
+
+        for (let i = 0; i < enemies.length; i++) {
+          const e = enemies[i];
+          if (e.dead) continue;
+
+          const overlap =
+            player.x < e.x + e.size &&
+            player.x + player.w > e.x &&
+            player.y < e.y + e.size &&
+            player.y + player.h > e.y;
+
+          if (!overlap) continue;
+
+          const stomped = player.vy > 0 && prevBottom <= e.y + e.size * 0.45 && currBottom >= e.y;
+          if (stomped) {
+            e.dead = true;
+            registerEnemyKill(e);
+            player.y = e.y - player.h;
+            player.vy = cfg.jumpVelocity * 0.95;
+            player.squash = 0.6;
+            spawnShardBurst(e.x + e.size * 0.5, e.y + e.size * 0.45, 6, "#ffefd1");
+            audio.sfx("break");
+          } else {
+            const enemyCenterX = e.x + e.size * 0.5;
+            const pushDir = playerCenterX < enemyCenterX ? -1 : 1;
+            player.vx = pushDir * 175;
+            player.vy = Math.max(player.vy, 200);
+          }
+        }
+
+        const threshold = cameraY + canvas.height + cfg.despawnBelow;
+        enemies = enemies.filter((e) => !e.dead && e.y < threshold);
+      }
+
+      function drawEnemies(g) {
+        for (let i = 0; i < enemies.length; i++) {
+          enemies[i].draw(g);
+        }
+      }
+
+      function drawLasers(g) {
+        for (let i = 0; i < lasers.length; i++) {
+          const l = lasers[i];
+          const a = clamp(l.ttl / l.life, 0, 1);
+          g.strokeStyle = `rgba(255, 80, 80, ${a * 0.95})`;
+          g.lineWidth = 4;
+          g.beginPath();
+          g.moveTo(l.x1, l.y1);
+          g.lineTo(l.x2, l.y2);
+          g.stroke();
+          g.strokeStyle = `rgba(255, 240, 210, ${a})`;
+          g.lineWidth = 1.5;
+          g.beginPath();
+          g.moveTo(l.x1, l.y1);
+          g.lineTo(l.x2, l.y2);
+          g.stroke();
         }
       }
 
@@ -1326,6 +1717,7 @@
       function updateScoreAndPhase() {
         const climbed = Math.max(0, startPlayerY - player.y);
         bestHeight = Math.max(bestHeight, climbed);
+        updateUnlockProgress(Math.floor(bestHeight / 10));
 
         ui.scoreDisplay.textContent = `Height: ${Math.floor(bestHeight / 10)} m`;
         ui.phaseDisplay.textContent = `Phase: ${getPhase(bestHeight).name}`;
@@ -1336,6 +1728,7 @@
         if (player.y > deathLine) {
           state = GAME_STATES.GAME_OVER;
           ui.finalScoreText.textContent = `Final height: ${Math.floor(bestHeight / 10)} m`;
+          ui.enemyStatsText.textContent = `Enemies defeated: ${runStats.kills} (Circle ${runStats.byType.circle}, Triangle ${runStats.byType.triangle}, Square ${runStats.byType.square})`;
           showOverlay(ui.gameOver);
           ui.hud.classList.remove("active");
           audio.stopMusic();
@@ -1356,7 +1749,10 @@
           platforms[i].update(dt);
         }
 
+        updateEnemies(dt);
+        handleEnemyCollisions();
         applyFanForces(dt);
+        updateLasers(dt);
 
         updateCamera(dt);
         updateScoreAndPhase();
@@ -1369,7 +1765,12 @@
       function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (state === GAME_STATES.MENU || state === GAME_STATES.SETTINGS || state === GAME_STATES.CREDITS) {
+        if (
+          state === GAME_STATES.MENU ||
+          state === GAME_STATES.PLAYER_SELECT ||
+          state === GAME_STATES.SETTINGS ||
+          state === GAME_STATES.CREDITS
+        ) {
           drawMenuScene(ctx, performance.now() * 0.001);
           return;
         }
@@ -1383,6 +1784,8 @@
           platforms[i].draw(ctx);
         }
 
+        drawEnemies(ctx);
+        drawLasers(ctx);
         player.draw(ctx);
         drawParticles(ctx);
 
@@ -1506,7 +1909,7 @@
         }
 
         // Clouds in sky zone, then slowly dissolve away at extreme heights.
-        const cloudDissolve = smoothStep((climb - (spaceStart - 120)) / 2200);
+        const cloudDissolve = smoothStep((climb - (spaceStart + 900)) / 7800);
         const cloudAlpha = clamp(grassToSky * (1 - skyToSpace * 0.65) * (1 - cloudDissolve), 0, 0.58);
         const cloudCover = clamp(cloudAlpha / 0.58, 0, 1);
         const moonClarity = 1 - cloudCover;
@@ -1694,6 +2097,12 @@
           showOverlay(ui.menu);
           ui.hud.classList.remove("active");
           audio.stopMusic();
+          syncMenuSelectionInfo();
+        } else if (state === GAME_STATES.PLAYER_SELECT) {
+          showOverlay(ui.playerSelect);
+          ui.hud.classList.remove("active");
+          syncMenuSelectionInfo();
+          renderPlayerSelectUI();
         } else if (state === GAME_STATES.SETTINGS) {
           showOverlay(ui.settings);
           ui.hud.classList.remove("active");
@@ -1724,6 +2133,7 @@
 
       function hideOverlays() {
         ui.menu.classList.remove("active");
+        ui.playerSelect.classList.remove("active");
         ui.settings.classList.remove("active");
         ui.credits.classList.remove("active");
         ui.gameOver.classList.remove("active");
@@ -1763,6 +2173,100 @@
 
       function saveSettings() {
         localStorage.setItem("kangaLeapSettings", JSON.stringify(settings));
+      }
+
+      function loadProgress() {
+        const defaults = {
+          selectedBall: "basketball",
+          unlockedBallIds: ["basketball"],
+          bestHeightM: 0
+        };
+
+        try {
+          const raw = localStorage.getItem("ballJumpProgressV1");
+          if (!raw) return defaults;
+          const parsed = JSON.parse(raw);
+
+          const progress = {
+            selectedBall: typeof parsed.selectedBall === "string" ? parsed.selectedBall : "basketball",
+            unlockedBallIds: ["basketball"],
+            bestHeightM: Math.max(0, Math.floor(Number(parsed.bestHeightM ?? 0)))
+          };
+          ensureUnlocksForBest(progress);
+          if (!progress.unlockedBallIds.includes(progress.selectedBall)) {
+            progress.selectedBall = "basketball";
+          }
+          return progress;
+        } catch {
+          return defaults;
+        }
+      }
+
+      function saveProgress() {
+        localStorage.setItem("ballJumpProgressV1", JSON.stringify(progression));
+      }
+
+      function ensureUnlocksForBest(progressObj) {
+        for (let i = 0; i < BALLS.length; i++) {
+          const b = BALLS[i];
+          if (progressObj.bestHeightM >= b.unlockM && !progressObj.unlockedBallIds.includes(b.id)) {
+            progressObj.unlockedBallIds.push(b.id);
+          }
+        }
+      }
+
+      function getSelectedBallDef() {
+        const selected = BALLS.find((b) => b.id === progression.selectedBall);
+        return selected || BALLS[0];
+      }
+
+      function setSelectedBall(ballId) {
+        if (!progression.unlockedBallIds.includes(ballId)) return;
+        progression.selectedBall = ballId;
+        saveProgress();
+        syncMenuSelectionInfo();
+        renderPlayerSelectUI();
+      }
+
+      function updateUnlockProgress(heightM) {
+        const prevUnlocked = progression.unlockedBallIds.length;
+        if (heightM > progression.bestHeightM) {
+          progression.bestHeightM = heightM;
+          ensureUnlocksForBest(progression);
+          saveProgress();
+        }
+
+        if (progression.unlockedBallIds.length !== prevUnlocked) {
+          renderPlayerSelectUI();
+          syncMenuSelectionInfo();
+        }
+      }
+
+      function syncMenuSelectionInfo() {
+        const selected = getSelectedBallDef();
+        ui.selectedBallInfo.textContent = `Selected: ${selected.label} | Best: ${progression.bestHeightM} m`;
+        ui.unlockProgressText.textContent = `Best height: ${progression.bestHeightM} m`;
+      }
+
+      function renderPlayerSelectUI() {
+        ui.playerList.innerHTML = "";
+        const selected = getSelectedBallDef();
+
+        for (let i = 0; i < BALLS.length; i++) {
+          const ball = BALLS[i];
+          const unlocked = progression.unlockedBallIds.includes(ball.id);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = `ballOption${unlocked ? "" : " locked"}${selected.id === ball.id ? " selected" : ""}`;
+          const status = unlocked ? (selected.id === ball.id ? "Selected" : "Unlocked") : `Unlock at ${ball.unlockM} m`;
+          btn.innerHTML = `${ball.label}<span class="ballMeta">${status}</span>`;
+          if (!unlocked) btn.disabled = true;
+          btn.addEventListener("click", () => {
+            audio.sfx("menuClick");
+            setSelectedBall(ball.id);
+          });
+          ui.playerList.appendChild(btn);
+        }
       }
 
       function syncSettingsUI() {
@@ -1926,6 +2430,10 @@
 
       function bindUI() {
         ui.startBtn.addEventListener("click", () => startGame());
+        ui.playerSelectBtn.addEventListener("click", () => {
+          audio.sfx("menuClick");
+          setState(GAME_STATES.PLAYER_SELECT);
+        });
         ui.settingsBtn.addEventListener("click", () => {
           audio.sfx("menuClick");
           setState(GAME_STATES.SETTINGS);
@@ -1939,6 +2447,10 @@
           setState(GAME_STATES.MENU);
         });
         ui.creditsBackBtn.addEventListener("click", () => {
+          audio.sfx("menuClick");
+          setState(GAME_STATES.MENU);
+        });
+        ui.playerBackBtn.addEventListener("click", () => {
           audio.sfx("menuClick");
           setState(GAME_STATES.MENU);
         });
@@ -2017,6 +2529,14 @@
           input.right = false;
           if (state === GAME_STATES.PLAYING) setPaused(true);
         });
+
+        canvas.addEventListener("mousedown", (e) => {
+          if (state !== GAME_STATES.PLAYING) return;
+          const rect = canvas.getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+          const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+          shootLaserAtScreenPos(x, y);
+        });
       }
 
       function update(dt) {
@@ -2039,6 +2559,10 @@
       function init() {
         bindUI();
         bindInput();
+        ensureUnlocksForBest(progression);
+        saveProgress();
+        syncMenuSelectionInfo();
+        renderPlayerSelectUI();
 
         resetGameWorld();
         setState(GAME_STATES.MENU);
